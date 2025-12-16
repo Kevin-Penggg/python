@@ -1,0 +1,158 @@
+from fileinput import filename
+
+from lxml import etree
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+import time
+import os
+
+def get_web_html(url):
+    service = Service(executable_path=r'C:\Users\0000\PycharmProjects\chromedriver-win64\chromedriver.exe')
+    opt = Options()
+    opt.add_argument('--disable-blink-features=AutomationControlled')
+
+    browser = webdriver.Chrome(service=service, options=opt)
+    browser.get(url)
+    time.sleep(3)
+    page_text = browser.page_source
+    browser.close()
+    html = etree.HTML(page_text)
+    return html
+
+
+def get_books_url(html):
+    specific_links = html.xpath('//a[contains(@title, "最新章节在线阅读")]')
+    book_data = []
+    for i, link in enumerate(specific_links, 1):
+        try:
+            href = link.xpath('./@href')[0]
+            title_full = link.xpath('./@title')[0]
+            title = title_full.replace('最新章节在线阅读', '').strip()
+            book_data.append({
+                'title': title,
+                'href': href,
+                'id': href.split('/')[-2] if '/' in href else ''
+            })
+        except Exception as e:
+            print(f"解析第{i}个链接时出错: {e}")
+            continue
+
+    # 修正：使用不同的变量名，正确处理URL
+    processed_books = []
+    for i, book in enumerate(book_data, 1):
+        title = book['title']
+        book_url = book['href']  # 使用不同的变量名
+
+        # os.makedirs(f'downloaded_books/{title}')
+        if book_url.startswith('//'):
+            full_url = 'https:' + book_url
+        elif book_url.startswith('/'):
+            full_url = 'https://www.qidian.com' + book_url
+        else:
+            full_url = book_url
+
+        book_dir = f'downloaded_books/{title}'
+        os.makedirs(book_dir, exist_ok=True)
+
+        processed_books.append({
+            'title': title,
+            'full_url': full_url,
+            'dir': book_dir
+        })
+
+    return processed_books  # 返回处理后的完整书籍信息
+
+
+def get_books_contents(books_info):
+    for book_info in books_info:  # 直接遍历列表，不需要enumerate
+        url = book_info['full_url']  # 获取完整的URL
+        print(f"正在处理书籍: {book_info['title']}")
+        html = get_web_html(url)
+
+        # 修正XPath语法
+        specific_links = html.xpath('//a[@class="chapter-name"]')  # 正确的属性选择器语法
+
+        book_chapter = []
+        for i, link in enumerate(specific_links, 1):
+            try:
+                href = link.xpath('./@href')[0]
+                # 章节标题可能来自text()而不是title属性
+                title_text = link.xpath('./text()')
+                if title_text:
+                    title = title_text[0].strip()
+                else:
+                    title = f"第{i}章"
+
+                # 处理章节URL
+                if href.startswith('//'):
+                    chapter_url = 'https:' + href
+                elif href.startswith('/'):
+                    chapter_url = 'https://www.qidian.com' + href
+                else:
+                    chapter_url = href
+
+                book_chapter.append({
+                    'title': title,
+                    'href': chapter_url,
+
+                })
+                print(f"  找到章节: {title}：{chapter_url}")
+
+            except Exception as e:
+                print(f"解析第{i}个章节时出错: {e}")
+                continue
+
+        # 可以在这里处理章节内容
+        print(f"书籍《{book_info['title']}》找到 {len(book_chapter)} 个章节")
+
+        # 添加延时避免请求过于频繁
+        time.sleep(2)
+    return book_chapter
+
+def download_books(book_chapter):
+    for i,book_chapter in enumerate(book_chapter,1):
+        url = book_chapter['href']  # 获取完整的章节URL
+        book_dir = book_chapter['book_dir']
+        chapter_title = book_chapter['title']
+
+        print(f"正在处理书籍: {book_chapter['title']}")
+        html = get_web_html(url)
+
+        chapter_id = url.split('/')[-2]
+        book_txt = html.xpath(f'//main[@id="c-{chapter_id}"]')[0]  # 正确的属性选择器语法
+        all_text = book_txt.xpath('string(.)')
+
+        safe_chapter_title = ''.join(c for c in chapter_title if c not in r'\/:*?"<>|')
+        if len(safe_chapter_title) > 50:
+            safe_chapter_title = safe_chapter_title[:50] + "..."
+
+        filename = os.path.join(book_dir, f"{safe_chapter_title}.txt")
+
+        # 写入文件
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(f"{chapter_title}\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(all_text)
+            f.write("\n\n")
+
+        print(f"  已保存: {filename}")
+        time.sleep(1)  # 下载间隔
+
+
+# 主函数
+def main():
+    # os.makedirs('downloaded_books')
+    url = 'https://www.qidian.com/all/'
+    html = get_web_html(url)
+    books_info = get_books_url(html)  # 先获取书籍信息
+    print(f"总共找到 {len(books_info)} 本书")
+
+    # 然后获取书籍内容
+    get_books_contents(books_info)
+    book_chapter = get_books_contents(books_info)
+    download_books(book_chapter)
+
+
+if __name__ == "__main__":
+    main()
