@@ -1,0 +1,372 @@
+import pygame
+import sys
+import setting
+import random
+
+'初始化'
+
+
+def init_game():
+    pygame.init()
+    # 创建游戏窗口
+    screen = pygame.display.set_mode((800, 600))
+    pygame.display.set_caption("Kevin's game")
+    return screen, False
+
+
+'切换全屏/窗口模式'
+
+
+def toggle_fullscreen(screen, fullscreen):
+    if fullscreen:
+        new_screen = pygame.display.set_mode((800, 600))
+    else:
+        new_screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    return new_screen, not fullscreen
+
+
+'角色创建'
+
+
+class Ship(pygame.sprite.Sprite):
+    def __init__(self, screen_rect):
+        super().__init__()
+        # 加载不同方向的飞船图片
+        self.images = {
+            'up': pygame.image.load('images/ship.bmp'),
+            'down': pygame.image.load('images/ship_D.bmp'),  # 如果需要不同图片可以替换
+            'left': pygame.image.load('images/ship_L.bmp'),  # 如果需要不同图片可以替换
+            'right': pygame.image.load('images/ship_R.bmp')  # 如果需要不同图片可以替换
+        }
+        # 如果没有不同方向的图片，可以通过旋转创建
+        self.images['up'] = pygame.image.load('images/ship.bmp')
+        self.images['down'] = pygame.transform.rotate(self.images['up'], 180)
+        self.images['left'] = pygame.transform.rotate(self.images['up'], 90)
+        self.images['right'] = pygame.transform.rotate(self.images['up'], -90)
+
+        self.direction = 'up'  # 默认方向
+        self.image = self.images[self.direction]
+        self.rect = self.image.get_rect()
+        # 将角色放在屏幕中心
+        self.rect.center = screen_rect.center
+
+    def change_direction(self, direction):
+        """改变飞船方向"""
+        if direction in self.images and direction != self.direction:
+            self.direction = direction
+            self.image = self.images[direction]
+            # 保持中心位置不变
+            old_center = self.rect.center
+            self.rect = self.image.get_rect()
+            self.rect.center = old_center
+
+
+'角色移动'
+
+
+def handle_ship_movement(ship, screen_rect, moving_flags):
+    # 根据移动方向更新飞船朝向
+    if moving_flags['left'] and not moving_flags['right']:
+        ship.change_direction('left')
+    elif moving_flags['right'] and not moving_flags['left']:
+        ship.change_direction('right')
+    elif moving_flags['up'] and not moving_flags['down']:
+        ship.change_direction('up')
+    elif moving_flags['down'] and not moving_flags['up']:
+        ship.change_direction('down')
+
+    # 移动飞船
+    if moving_flags['left'] and ship.rect.left > 0:
+        ship.rect.x -= setting.ship_speed
+    if moving_flags['right'] and ship.rect.right < screen_rect.right:
+        ship.rect.x += setting.ship_speed
+    if moving_flags['up'] and ship.rect.top > 0:
+        ship.rect.y -= setting.ship_speed
+    if moving_flags['down'] and ship.rect.bottom < screen_rect.bottom:
+        ship.rect.y += setting.ship_speed
+
+
+'子弹'
+
+
+class BulletAssets:
+    def __init__(self):
+        # 先存储图片路径，不立即加载
+        self.image_paths = {
+            'up': 'images/bullet.bmp',
+            'down': 'images/bullet_D.bmp',
+            'left': 'images/bullet_L.bmp',
+            'right': 'images/bullet_R.bmp'
+        }
+        self.images = {}
+        self.loaded = False
+
+    def load_images(self):
+        """在Pygame显示初始化后调用此方法来加载图片"""
+        if not self.loaded:
+            for key, path in self.image_paths.items():
+                try:
+                    self.images[key] = pygame.image.load(path).convert_alpha()
+                except pygame.error as e:
+                    print(f"Error loading image {path}: {e}")
+                    # 创建一个替代的彩色表面
+                    self.images[key] = pygame.Surface((10, 20), pygame.SRCALPHA)
+                    if key == 'up':
+                        self.images[key].fill((255, 0, 0))  # 红色
+                    elif key == 'down':
+                        self.images[key].fill((0, 255, 0))  # 绿色
+                    elif key == 'left':
+                        self.images[key].fill((0, 0, 255))  # 蓝色
+                    elif key == 'right':
+                        self.images[key].fill((255, 255, 0))  # 黄色
+            self.loaded = True
+
+    def get_image(self, direction):
+        """获取指定方向的子弹图片"""
+        if not self.loaded:
+            self.load_images()
+        return self.images.get(direction, self.images['up'])
+
+
+# 创建全局实例，但延迟加载图片
+bullet_assets = BulletAssets()
+
+
+def create_bullet(ship, direction=None):
+    """创建子弹，如果不指定方向则使用飞船当前方向"""
+    if direction is None:
+        direction = ship.direction
+
+    new_bullet = pygame.sprite.Sprite()
+
+    # 初始化速度变量
+    new_bullet.speed_x = 0
+    new_bullet.speed_y = 0
+    new_bullet.direction = direction  # 存储子弹方向
+
+    # 使用BulletAssets类来获取图片
+    new_bullet.image = bullet_assets.get_image(direction)
+    new_bullet.rect = new_bullet.image.get_rect()
+
+    if direction == "up":
+        new_bullet.rect.midbottom = ship.rect.midtop
+        new_bullet.speed_y = -setting.bullet_speed
+
+    elif direction == "down":
+        new_bullet.rect.midtop = ship.rect.midbottom
+        new_bullet.speed_y = setting.bullet_speed
+
+    elif direction == "left":
+        new_bullet.rect.midright = ship.rect.midleft
+        new_bullet.speed_x = -setting.bullet_speed
+
+    elif direction == "right":
+        new_bullet.rect.midleft = ship.rect.midright
+        new_bullet.speed_x = setting.bullet_speed
+
+    return new_bullet
+
+
+def update_bullets(bullets, screen_rect):
+    for bullet in bullets.copy():
+        bullet.rect.x += bullet.speed_x
+        bullet.rect.y += bullet.speed_y
+
+        if (bullet.rect.bottom < 0 or bullet.rect.top > screen_rect.height or \
+                bullet.rect.right < 0 or bullet.rect.left > screen_rect.width):
+            bullets.remove(bullet)
+
+
+def spawn_random_aliens(screen_rect, alien_width, alien_height, count=10):
+    aliens = pygame.sprite.Group()
+    for _ in range(count):
+        alien_sprite = pygame.sprite.Sprite()
+        alien_sprite.image = pygame.image.load('images/alien.bmp')
+        alien_sprite.rect = alien_sprite.image.get_rect()
+        # 随机生成在屏幕任意位置
+        alien_sprite.rect.x = random.randint(0, screen_rect.width - alien_width)
+        alien_sprite.rect.y = random.randint(0, screen_rect.height - alien_height)
+        aliens.add(alien_sprite)
+    return aliens
+
+
+def handle_events(moving_flags):
+    space_pressed = False
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
+
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_LEFT:
+                moving_flags['left'] = True
+            if event.key == pygame.K_RIGHT:
+                moving_flags['right'] = True
+            if event.key == pygame.K_UP:
+                moving_flags['up'] = True
+            if event.key == pygame.K_DOWN:
+                moving_flags['down'] = True
+            if event.key == pygame.K_SPACE:
+                space_pressed = True
+            if event.key == pygame.K_ESCAPE:
+                pygame.quit()
+                sys.exit()
+
+        elif event.type == pygame.KEYUP:
+            if event.key == pygame.K_LEFT:
+                moving_flags['left'] = False
+            if event.key == pygame.K_RIGHT:
+                moving_flags['right'] = False
+            if event.key == pygame.K_UP:
+                moving_flags['up'] = False
+            if event.key == pygame.K_DOWN:
+                moving_flags['down'] = False
+
+    return space_pressed
+
+
+'渲染'
+
+
+def render_game_info(screen, font, clock, aliens, bullets, lives, ship_direction):
+    # 显示帧数
+    fps_text = font.render(f"FPS: {int(clock.get_fps())}", True, (255, 255, 255))
+    screen.blit(fps_text, (10, 10))
+
+    # 显示外星人数量
+    aliens_count_text = font.render(f"Aliens: {len(aliens)}", True, (255, 255, 255))
+    screen.blit(aliens_count_text, (10, 50))
+
+    # 显示子弹数量
+    bullets_count_text = font.render(f"Bullets:{len(bullets)}", True, (255, 255, 255))
+    screen.blit(bullets_count_text, (10, 90))
+
+    # 显示生命值
+    lives_text = font.render(f"Lives: {lives}", True, (255, 255, 255))
+    screen.blit(lives_text, (10, 130))
+
+    # 显示飞船方向
+    direction_text = font.render(f"Direction: {ship_direction.upper()}", True, (255, 255, 255))
+    screen.blit(direction_text, (10, 170))
+
+
+def render_game_over(screen, font):
+    screen.fill((0, 0, 0))
+    game_over_text = font.render("GAME OVER", True, (255, 0, 0))
+    screen.blit(game_over_text, (screen.get_width() // 2 - 100, screen.get_height() // 2))
+
+    restart_text = font.render("Press R to restart or ESC to quit", True, (255, 255, 255))
+    screen.blit(restart_text, (screen.get_width() // 2 - 180, screen.get_height() // 2 + 50))
+
+    pygame.display.flip()
+
+
+def render_game(screen, ship, bullets, aliens, font, clock, lives):
+    screen.fill(setting.bg_color)
+    screen.blit(ship.image, ship.rect)
+    bullets.draw(screen)
+    aliens.draw(screen)
+    render_game_info(screen, font, clock, aliens, bullets, lives, ship.direction)
+
+    pygame.display.flip()
+
+
+def main():
+    screen, fullscreen = init_game()
+    screen_rect = screen.get_rect()
+
+    # 创建飞船精灵对象
+    ship = Ship(screen_rect)
+
+    # 在显示初始化后，手动加载子弹图片
+    bullet_assets.load_images()
+
+    moving_flags = {
+        'left': False,
+        'right': False,
+        'up': False,
+        'down': False
+    }
+
+    bullets = pygame.sprite.Group()
+    last_shot_time = 0
+
+    # 加载外星人图片以获取尺寸
+    alien_image = pygame.image.load('images/alien.bmp')
+    alien_rect = alien_image.get_rect()
+    alien_width = alien_rect.width
+    alien_height = alien_rect.height
+
+    # 初始生成10个外星人
+    aliens = spawn_random_aliens(screen_rect, alien_width, alien_height, 10)
+
+    # 外星人生成控制
+    last_alien_spawn_time = 0
+    alien_spawn_interval = 5000  # 5秒生成一批新外星人
+
+    # 字体时钟
+    font = pygame.font.Font(None, 36)
+    clock = pygame.time.Clock()
+
+    # 游戏状态
+    lives = 3
+    game_over = False
+
+    '''主循环'''
+    while True:
+        clock.tick(setting.FPS)
+        current_time = pygame.time.get_ticks()
+
+        space_pressed = handle_events(moving_flags)
+
+        if game_over:
+            render_game_over(screen, font)
+            # 等待玩家选择重启或退出
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        pygame.quit()
+                        sys.exit()
+                    elif event.key == pygame.K_r:
+                        # 重新开始游戏
+                        return main()
+            continue
+
+        handle_ship_movement(ship, screen_rect, moving_flags)
+
+        # 手动发射子弹 - 子弹方向与飞船当前方向一致
+        if space_pressed and len(bullets) < setting.bullets_allowed:
+            if current_time - last_shot_time > setting.bullet_cooldown:
+                new_bullet = create_bullet(ship)  # 不指定方向，使用飞船当前方向
+                bullets.add(new_bullet)
+                last_shot_time = current_time
+
+        # 更新子弹
+        update_bullets(bullets, screen_rect)
+
+        # 定期生成新的外星人
+        if current_time - last_alien_spawn_time > alien_spawn_interval:
+            new_aliens = spawn_random_aliens(screen_rect, alien_width, alien_height, 10)
+            aliens.add(*new_aliens.sprites())
+            last_alien_spawn_time = current_time
+
+        # 检测子弹与外星人的碰撞
+        pygame.sprite.groupcollide(bullets, aliens, True, True)
+
+        # 检测角色与外星人的碰撞
+        ship_collisions = pygame.sprite.spritecollide(ship, aliens, True)
+        if ship_collisions:
+            lives -= len(ship_collisions)
+            if lives <= 0:
+                game_over = True
+
+        # 渲染游戏
+        render_game(screen, ship, bullets, aliens, font, clock, lives)
+
+
+if __name__ == "__main__":
+    main()
